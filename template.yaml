@@ -1,0 +1,102 @@
+AWSTemplateFormatVersion : '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+
+Description: An example serverless API and worker written in Golang.
+
+Resources:
+
+  DynamodbTable:
+    Type: AWS::DynamoDB::Table
+    Properties: 
+      AttributeDefinitions: 
+        - 
+          AttributeName: "UserId"
+          AttributeType: "S"
+        - 
+          AttributeName: "DeviceId"
+          AttributeType: "S"
+      KeySchema: 
+        - 
+          AttributeName: "UserId"
+          KeyType: "HASH"
+        - 
+          AttributeName: "DeviceId"
+          KeyType: "RANGE"
+      ProvisionedThroughput: 
+        ReadCapacityUnits: "5"
+        WriteCapacityUnits: "5"
+      TableName: "persistent_configuration_table"
+
+  Api:
+    Type: AWS::Serverless::Function
+    Properties:
+      Runtime: go1.x
+      Handler: build/api
+      Timeout: 10
+      VpcConfig:
+          SecurityGroupIds: 
+            - sg-7be6473e
+          SubnetIds: 
+            - subnet-0edef2d5f08c0d491
+            - subnet-08c4151f1c0ba9013
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DynamodbTable
+        - AWSSecretsManagerGetSecretValuePolicy:
+            SecretArn: 'arn:aws:secretsmanager:ap-northeast-1:159089215924:secret:activemq/test-HecvnE'
+      Environment:
+        Variables:
+          DDB_TABLE: !Ref DynamodbTable
+          USER_NAME: '{{resolve:secretsmanager:activemq/test:SecretString:username}}'
+          PASSWORD: '{{resolve:secretsmanager:activemq/test:SecretString:password}}'
+          MQ_ENDPOINT: 'b-5b1fb9b1-bdb7-4b0e-8820-6d20aabe3aea-1.mq.ap-northeast-1.amazonaws.com:61614'
+          QUEUE: '/queue/testmq'
+      Events:
+        HelloHandler:
+          Type: Api
+          Properties:
+            Path: '/configure'
+            Method: post
+
+  Worker:
+    Type: AWS::Serverless::Function
+    Properties:
+      Runtime: go1.x
+      Handler: build/worker
+      Timeout: 15
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DynamodbTable
+        - Version: '2012-10-17' 
+          Statement:
+            - Effect: Allow
+              Action:
+                - ec2:CreateNetworkInterface
+                - ec2:DeleteNetworkInterface
+                - ec2:DescribeNetworkInterfaces
+                - ec2:DescribeSecurityGroups
+                - ec2:DescribeSubnets
+                - ec2:DescribeVpcs
+                - iot:*
+              Resource: '*'
+      Environment:
+        Variables:
+          DDB_TABLE: !Ref DynamodbTable
+      Events:
+        MQEvent:
+          Type: MQ
+          Properties:
+            Broker: arn:aws:mq:ap-northeast-1:159089215924:broker:poc-testing:b-5b1fb9b1-bdb7-4b0e-8820-6d20aabe3aea
+            Queues:
+              - testmq
+            SourceAccessConfigurations:
+              - Type: BASIC_AUTH
+                URI: arn:aws:secretsmanager:ap-northeast-1:159089215924:secret:activemq/test-HecvnE
+            BatchSize: 200
+            Enabled: true
+
+
+
+Outputs:
+  Endpoint:
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/"
